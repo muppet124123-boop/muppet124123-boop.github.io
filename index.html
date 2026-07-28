@@ -64,6 +64,22 @@ body { margin: 0; color: var(--next-error-text); background: var(--next-error-bg
     if (!shell) return;
     shell.querySelector(".auth-stage")?.remove();
     shell.insertAdjacentHTML("beforeend", workspace);
+    const sidebar = document.querySelector(".sidebar");
+    function closeSidebar() {
+      sidebar?.classList.remove("open");
+      document.querySelector(".sidebar-scrim")?.remove();
+    }
+    document.querySelector(".mobile-menu")?.addEventListener("click", () => {
+      sidebar?.classList.add("open");
+      if (!document.querySelector(".sidebar-scrim")) {
+        const scrim = document.createElement("button");
+        scrim.className = "sidebar-scrim";
+        scrim.setAttribute("aria-label", "关闭会话列表");
+        scrim.addEventListener("click", closeSidebar);
+        shell.appendChild(scrim);
+      }
+    });
+    document.querySelectorAll(".session").forEach(button => button.addEventListener("click", closeSidebar));
     document.querySelectorAll("[data-prompt]").forEach(button => button.addEventListener("click", () => send(button.dataset.prompt)));
     const textarea = document.querySelector(".composer textarea");
     document.querySelector(".send-button")?.addEventListener("click", () => { send(textarea?.value); if (textarea) textarea.value = ""; });
