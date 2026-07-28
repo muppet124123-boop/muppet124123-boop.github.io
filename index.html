@@ -59,6 +59,130 @@ body { margin: 0; color: var(--next-error-text); background: var(--next-error-bg
     addMessage("user", text);
     setTimeout(() => addMessage("assistant", replies[text] || "收到。我会把这个问题拆成数据表现、内容表达、直播节奏和可执行动作四部分。当前是演示模式。"), 350);
   }
+  const ACCOUNT_KEY = "live-replay-compass.accounts.v1";
+  const SESSION_KEY = "live-replay-compass.session.v1";
+  const CODE_KEY = "live-replay-compass.code.v1";
+  const localAuthStyle = document.createElement("style");
+  localAuthStyle.textContent = ".local-auth-message{margin:0;padding:10px 12px;border-radius:12px;font-size:13px;line-height:1.5}.local-auth-message.info{color:#315bea;background:#315bea12}.local-auth-message.success{color:#087f5b;background:#12b88618}.local-auth-message.error{color:#c92a2a;background:#fa525218}.dark .local-auth-message.success{color:#69dbb5}.dark .local-auth-message.error{color:#ff8787}";
+  document.head.appendChild(localAuthStyle);
+  function readAccounts() {
+    try { return JSON.parse(localStorage.getItem(ACCOUNT_KEY) || "{}"); }
+    catch { return {}; }
+  }
+  function bytesToHex(bytes) {
+    return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+  }
+  async function passwordHash(password, salt) {
+    const payload = new TextEncoder().encode(salt + ":" + password);
+    return bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", payload)));
+  }
+  function authMode() {
+    return document.querySelector(".auth-form")?.dataset.localMode ||
+      (document.querySelector(".auth-switch button")?.textContent?.trim() === "返回登录" ? "register" : "login");
+  }
+  function setAuthMessage(text, kind = "info") {
+    const form = document.querySelector(".auth-form");
+    if (!form) return;
+    form.querySelector(".local-auth-message")?.remove();
+    const message = document.createElement("p");
+    message.className = "local-auth-message " + kind;
+    message.textContent = text;
+    form.querySelector(".primary-button")?.before(message);
+  }
+  function renderLocalAuth(mode = "login", method = "password") {
+    const form = document.querySelector(".auth-form");
+    const switcher = document.querySelector(".auth-switch");
+    const tabs = document.querySelector(".login-tabs");
+    if (!form || !switcher) return;
+    const oldPhone = form.querySelector('input[placeholder="请输入手机号码"]')?.value || "";
+    form.dataset.localMode = mode;
+    form.dataset.localMethod = method;
+    if (tabs) {
+      tabs.style.display = mode === "login" ? "" : "none";
+      tabs.querySelectorAll("button").forEach(button => button.classList.toggle("active", button.textContent.trim() === (method === "code" ? "验证码" : "账号密码")));
+      tabs.querySelector(".tab-slider")?.classList.toggle("right", method === "code");
+    }
+    const phoneField = '<label><span>手机号码</span><div class="input-wrap"><b>⌕</b><input value="' +
+      oldPhone.replace(/[^\d]/g, "").slice(0, 11) +
+      '" placeholder="请输入手机号码" inputmode="numeric" autocomplete="tel"></div></label>';
+    const passwordField = '<label><span>' + (mode === "register" ? "设置密码" : "登录密码") +
+      '</span><div class="input-wrap"><b>◇</b><input type="password" placeholder="至少 6 位" autocomplete="' +
+      (mode === "register" ? "new-password" : "current-password") + '"></div></label>';
+    const codeField = '<label><span>验证码</span><div class="input-wrap code-wrap"><b>✓</b><input placeholder="输入验证码" inputmode="numeric"><button type="button">获取验证码</button></div></label>';
+    form.innerHTML = phoneField +
+      (mode === "register" || method === "code" ? codeField : "") +
+      (mode === "register" || method === "password" ? passwordField : "") +
+      '<button class="primary-button" type="submit">' + (mode === "register" ? "创建账号" : "登 录") + '<span>→</span></button>' +
+      '<button class="demo-button" type="button">直接进入演示工作台</button>';
+    switcher.innerHTML = (mode === "register" ? "已有账号？" : "还没有账号？") +
+      '<button type="button">' + (mode === "register" ? "返回登录" : "立即注册") + '</button>';
+    applyLocalAccountCopy();
+  }
+  function applyLocalAccountCopy() {
+    const note = document.querySelector(".privacy-note");
+    const copy = "本地体验账号仅保存在当前浏览器，不会上传云端";
+    if (note && note.textContent !== copy) note.textContent = copy;
+  }
+  function applySessionProfile() {
+    let session = null;
+    try { session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch {}
+    if (!session?.phone) return;
+    const name = document.querySelector(".profile strong");
+    const detail = document.querySelector(".profile small");
+    const avatar = document.querySelector(".profile .avatar");
+    if (name) name.textContent = "用户 " + session.phone.slice(-4);
+    if (detail) detail.textContent = "本地体验账号";
+    if (avatar) avatar.textContent = session.phone.slice(-1);
+  }
+  function issueLocalCode() {
+    const phone = document.querySelector('.auth-form input[placeholder="请输入手机号码"]')?.value?.trim() || "";
+    if (!/^1\d{10}$/.test(phone)) {
+      setAuthMessage("请先输入 11 位手机号码", "error");
+      return;
+    }
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    sessionStorage.setItem(CODE_KEY, JSON.stringify({ phone, code, expiresAt: Date.now() + 5 * 60 * 1000 }));
+    setAuthMessage("本地体验验证码：" + code + "（5 分钟内有效）", "success");
+  }
+  async function handleLocalAuth(form) {
+    const phone = form.querySelector('input[placeholder="请输入手机号码"]')?.value?.trim() || "";
+    const password = form.querySelector('input[type="password"]')?.value || "";
+    const code = form.querySelector('input[placeholder="输入验证码"]')?.value?.trim() || "";
+    const usingCode = Boolean(form.querySelector('input[placeholder="输入验证码"]'));
+    if (!/^1\d{10}$/.test(phone)) return setAuthMessage("请输入 11 位手机号码", "error");
+    if ((!usingCode || authMode() === "register") && password.length < 6) {
+      return setAuthMessage("密码至少需要 6 位", "error");
+    }
+    const accounts = readAccounts();
+    if (authMode() === "register") {
+      let issued = null;
+      try { issued = JSON.parse(sessionStorage.getItem(CODE_KEY) || "null"); } catch {}
+      if (!issued || issued.phone !== phone || issued.code !== code || issued.expiresAt < Date.now()) {
+        return setAuthMessage("请获取并输入有效的本地体验验证码", "error");
+      }
+      if (accounts[phone]) return setAuthMessage("该手机号已注册，请返回登录", "error");
+      const salt = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+      accounts[phone] = { salt, hash: await passwordHash(password, salt), createdAt: new Date().toISOString() };
+      localStorage.setItem(ACCOUNT_KEY, JSON.stringify(accounts));
+      sessionStorage.removeItem(CODE_KEY);
+    } else {
+      const account = accounts[phone];
+      if (!account) return setAuthMessage("账号不存在，请先注册", "error");
+      if (usingCode) {
+        let issued = null;
+        try { issued = JSON.parse(sessionStorage.getItem(CODE_KEY) || "null"); } catch {}
+        if (!issued || issued.phone !== phone || issued.code !== code || issued.expiresAt < Date.now()) {
+          return setAuthMessage("请获取并输入有效的本地体验验证码", "error");
+        }
+        sessionStorage.removeItem(CODE_KEY);
+      } else if (await passwordHash(password, account.salt) !== account.hash) {
+        return setAuthMessage("手机号或密码不正确", "error");
+      }
+    }
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ phone, signedInAt: new Date().toISOString() }));
+    mountWorkspace();
+    applySessionProfile();
+  }
   function mountWorkspace() {
     const shell = document.querySelector(".app-shell");
     if (!shell) return;
@@ -85,9 +209,41 @@ body { margin: 0; color: var(--next-error-text); background: var(--next-error-bg
     document.querySelector(".send-button")?.addEventListener("click", () => { send(textarea?.value); if (textarea) textarea.value = ""; });
     textarea?.addEventListener("keydown", event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(textarea.value); textarea.value = ""; } });
     document.querySelector(".new-chat")?.addEventListener("click", () => location.reload());
-    document.querySelector(".fallback-logout")?.addEventListener("click", () => location.reload());
+    document.querySelector(".fallback-logout")?.addEventListener("click", () => {
+      localStorage.removeItem(SESSION_KEY);
+      location.reload();
+    });
+    applySessionProfile();
   }
+  document.addEventListener("submit", event => {
+    const form = event.target.closest(".auth-form");
+    if (!form) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    handleLocalAuth(form).catch(() => setAuthMessage("注册处理失败，请刷新后重试", "error"));
+  }, true);
   document.addEventListener("click", event => {
+    const switchButton = event.target.closest(".auth-switch button");
+    if (switchButton) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      renderLocalAuth(authMode() === "register" ? "login" : "register", authMode() === "register" ? "password" : "code");
+      return;
+    }
+    const tabButton = event.target.closest(".login-tabs button");
+    if (tabButton) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      renderLocalAuth("login", tabButton.textContent.trim() === "验证码" ? "code" : "password");
+      return;
+    }
+    const codeButton = event.target.closest(".code-wrap button");
+    if (codeButton) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      issueLocalCode();
+      return;
+    }
     const button = event.target.closest(".demo-button");
     if (button && !document.querySelector(".workspace")) {
       event.preventDefault();
@@ -96,5 +252,9 @@ body { margin: 0; color: var(--next-error-text); background: var(--next-error-bg
     }
     if (event.target.closest(".theme-button")) document.querySelector(".app-shell")?.classList.toggle("dark");
   }, true);
+  const copyObserver = new MutationObserver(applyLocalAccountCopy);
+  copyObserver.observe(document.documentElement, { childList: true, subtree: true });
+  renderLocalAuth("login", "password");
+  applyLocalAccountCopy();
 })();
 </script></body></html>
